@@ -1,0 +1,9 @@
+data/**
+!data/**/.gitkeep
+*.tif
+*.npy
+*.pt
+*.pth
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
