@@ -1,4 +1,4 @@
-# Iowa to Sahel: Diagnosing and Fixing Land-Cover Segmentation Domain Shift
+# Iowa to Sahel: Diagnosing Land-Cover Domain Shift
 
 ## 1. Problem Framing
 
@@ -12,6 +12,16 @@ Since it's the same sensor, we can rule out differences in calibration, resoluti
 | H2 — Prior shift | Class frequencies are totally different (Iowa is 74% crop; Niger is 47% grass, 28% bare) | Class-balanced pseudo-labels, prior correction |
 | H3 — Concept shift | The same class label means different things — Sahel "cropland" is bare soil most of the year; shrub/grass/bare blur together in ways Iowa labels never had to deal with | Only target labels can fix this |
 
+Here's what the two domains actually look like — Iowa (top two rows) vs Niger (bottom two rows), RGB imagery with WorldCover labels:
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.55\textwidth]{figures/01_data_sanity.png}
+\caption{Dataset samples}
+\end{figure}
+
+Iowa is green, flat, regular crop fields. Niger is brown, dry, sparse vegetation on sandy soil. The difference is obvious at a glance.
+
 A drop this large (50 pts) is too big to be just radiometric differences. I expected all three hypotheses to play a role.
 
 **How this relates to the assignment.** The brief describes a 0.85→0.41 drop (44 pts). My stand-in dataset shows a larger shift: 0.56→0.06 (50 pts). The Iowa model is probably weaker because I'm using WorldCover labels (~75% accurate) instead of real ground truth, and only 255 training chips. The diagnostic conclusions (which hypotheses dominate) should still hold at the milder shift, though the probe recoveries (like histogram matching at 8%) might be higher when the baseline is already at 0.41. Over shared classes only, the drop is 48.7 pts — shrub is absent from Iowa, so the full 7-class mIoU includes a class the model can't possibly learn.
@@ -20,10 +30,12 @@ A drop this large (50 pts) is too big to be just radiometric differences. I expe
 
 I used a U-Net with ResNet-34 encoder (ImageNet pretrained, 24.4M params), 5-channel input (B2, B3, B4, B8, NDVI), 7 classes. Trained on 255 Iowa chips with a spatial block val split of 45 chips, 30 epochs, AdamW lr=3e-4, cosine annealing, class-weighted CE loss.
 
+\Needspace{12\baselineskip}
+
 | Domain | mIoU | tree | shrub | grass | crop | built | bare | water |
 |--------|------|------|-------|-------|------|-------|------|-------|
-| Source val (6 classes) | **0.561** | 0.69 | N/A | 0.57 | 0.85 | 0.42 | 0.00 | 0.83 |
-| Target eval (7 classes) | **0.063** | 0.01 | 0.00 | 0.20 | 0.04 | 0.19 | 0.00 | 0.01 |
+| Source val | **0.561** | 0.69 | N/A | 0.57 | 0.85 | 0.42 | 0.00 | 0.83 |
+| Target eval | **0.063** | 0.01 | 0.00 | 0.20 | 0.04 | 0.19 | 0.00 | 0.01 |
 | Drop | **49.8 pts** | | | | | | | |
 
 Note: source mIoU averages over 6 present classes (shrub is absent from Iowa). Target averages over all 7. Over the 6 shared classes only, the drop is 48.7 pts.
@@ -32,7 +44,11 @@ Note: source mIoU averages over 6 present classes (shrub is absent from Iowa). T
 
 The confusion matrix tells the story — on Niger, the model predicts almost everything as grass or crop: tree→grass (85%), shrub→grass+crop (99%), bare→crop (74%), water→grass (98%). It's just mapping everything to the classes it learned in Iowa.
 
-![Confusion matrices](figures/02_confusion_matrices.png)
+![Confusion matrices](figures/02_confusion_matrices.png){width=75%}
+
+Here's what the model actually predicts on source vs target chips — source predictions are reasonable, target predictions are mostly grass/crop everywhere:
+
+![Qualitative predictions](figures/02_qualitative.png){width=55%}
 
 ## 3. Diagnosis
 
@@ -44,31 +60,41 @@ I built five diagnostic artifacts, each targeting one of the three hypotheses.
 
 Per-band Wasserstein distances: B2=0.060, B3=0.102, B4=0.213, B8=0.035, NDVI=0.608. NDVI is by far the most shifted — Iowa peaks near 0.8 (lush vegetation) while Niger spreads across 0.1-0.5 (sparse, post-rains). B3 and B4 are also shifted because Niger soils are much brighter.
 
+\FloatBarrier
+
 ### Artifact 2: Feature Shift (H1)
 
-![Feature shift](figures/03_feature_shift.png)
+![Feature shift](figures/03_feature_shift.png){width=60%}
 
 A logistic regression domain classifier on the encoder's bottleneck embeddings gets 99.8% accuracy (proxy A-distance = 1.99). The UMAP shows total separation — no overlap between domains at all. This isn't surprising given how different the inputs are, but it confirms the encoder learned domain-specific features rather than domain-invariant ones.
 
+\FloatBarrier
+
 ### Artifact 3: Prior Shift (H2)
 
-![Prior shift](figures/03_prior_shift.png)
+![Prior shift](figures/03_prior_shift.png){width=75%}
 
 Iowa training data is 74% crop with almost no shrub or bare. Niger is 47% grass, 28% bare, 10% shrub — completely different class balance. The model's predictions on Niger are biased toward grass and crop because those are the only classes it learned well. Shrub doesn't exist in Iowa at all, so the model can't predict it — that's label shift by construction.
 
+\FloatBarrier
+
 ### Artifact 4: Concept Shift (H3)
 
-![Concept shift](figures/03_concept_shift.png)
+![Concept shift](figures/03_concept_shift.png){width=80%}
 
 The crop/grass/shrub/bare block in the target confusion matrix (red border) shows heavy confusion. These four classes get mixed up systematically.
 
 The entropy analysis turned up something interesting: incorrect target pixels have *lower* mean entropy (0.716) than correct ones (0.944). The model is actually more confident when it's wrong. Using the source val median entropy (0.244) as a threshold, about 8.3% of incorrect target pixels are below it. This pattern is consistent with concept shift — the model applies Iowa-learned features confidently to Sahel land cover and gets wrong answers. That said, neural nets are generally overconfident on out-of-distribution data, so this alone doesn't prove H3 over H1.
+
+\FloatBarrier
 
 ### Artifact 5: Zero-Training Probes
 
 ![Zero-training probes](figures/03_zero_training_probe.png)
 
 I tried three zero-training probes to see how much of the gap each hypothesis explains. Gap recovery = (probe_tgt - base_tgt) / (src_val - base_tgt).
+
+\Needspace{12\baselineskip}
 
 | Probe | Target mIoU | Source Val mIoU | Gap Recovery |
 |-------|-------------|-----------------|--------------|
@@ -80,6 +106,8 @@ I tried three zero-training probes to see how much of the gap each hypothesis ex
 Per-chip standardization recovers 8.9% but kills source performance (0.561→0.404) — the model relies on absolute radiometric values and z-scoring breaks that. Not usable. Histogram matching gets +7.9% without hurting source, but it's still small. Simple radiometric fixes don't explain this drop. The bulk of H1 is in texture, spatial patterns, and cross-band relationships that histogram matching can't touch.
 
 Oracle prior correction (rescaling softmax by target/source class ratios, skipping classes absent from source) recovers only 3.0%. It pushes grass from 0.20 to 0.45 — the model's grass features are decent, just suppressed by the Iowa prior — but tree, water, and built all collapse because the correction shifts probability mass away from them. Prior correction can't help when the features themselves are wrong, and even where features are OK, fixing one class breaks others. H2 is real (the class mix is totally different) but it can't be addressed by post-hoc reweighting alone.
+
+\FloatBarrier
 
 ### Hypothesis Weights
 
@@ -95,7 +123,13 @@ Going forward: if histogram matching had recovered >50% of the gap, I'd ship nor
 
 I tried a ladder of progressively stronger interventions, each building on the previous one. All evaluated on the same 60 target eval chips (which use WorldCover labels for evaluation only, never for training or selection).
 
-![Interventions ladder](figures/04_results_ladder.png)
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{figures/04_results_ladder.png}
+\caption{Interventions ladder}
+\end{figure}
+
+\Needspace{12\baselineskip}
 
 | Method | Source mIoU | Target mIoU | Delta |
 |--------|-------------|-------------|-------|
@@ -113,7 +147,7 @@ One thing to note: every intervention costs about 3-5 pts on Iowa (0.561→~0.52
 
 **4a — Photometric augmentation (+6.6 pts).** I used brightness/contrast/gamma jitter calibrated to the Wasserstein distances from Phase 3, plus histogram matching to random target chips as an augmentation. This is unsupervised — it uses target imagery but not labels. The gain is modest, which matches the Phase 3 finding that radiometric alignment alone can't close the gap.
 
-**4b — Self-training (+12.9 pts).** Mean teacher with EMA (α=0.99) and per-class confidence thresholds. The starting teacher only has 6.3% mIoU on Niger, so most pseudo-labels are wrong. The model confidently calls sand "crop," those pixels pass thresholds, and the error gets reinforced. Shrub never gets any pseudo-labels because the teacher never predicts it — self-training can't learn classes that aren't in the source domain.
+**4b — Self-training (+12.9 pts).** Mean teacher with EMA ($\alpha$=0.99) and per-class confidence thresholds. The starting teacher only has 6.3% mIoU on Niger, so most pseudo-labels are wrong. The model confidently calls sand "crop," those pixels pass thresholds, and the error gets reinforced. Shrub never gets any pseudo-labels because the teacher never predicts it — self-training can't learn classes that aren't in the source domain.
 
 Both teacher and student see the same geo-augmented target images in this implementation. The source branch uses photometric augmentation, but there's no teacher-student asymmetry on the target side. That probably limits the self-training gains — standard mean-teacher works better when the student gets a stronger augmentation than the teacher.
 
@@ -126,6 +160,8 @@ Still, self-training picks up +12.9 pts, so it's doing some useful covariate ada
 **4c from baseline (+25.9 pts).** The most interesting result. Same 30 active chips but fine-tuned directly from the baseline, skipping 4a and 4b. It scored 0.322 — same or better than the full ladder (0.313). The ladder doesn't compound once you have labels. One caveat: the chips were selected using the 4b teacher, so 4b still contributed indirectly through better chip selection. Whether baseline-selected chips would do as well is untested.
 
 **Oracle (+28.6 pts).** Fine-tuning on all 240 target labels gives the ceiling at 0.349, recovering 57% of the gap. The per-class numbers show where the limits are:
+
+\Needspace{12\baselineskip}
 
 | Class | Oracle IoU | Note |
 |-------|-----------|------|
@@ -157,6 +193,7 @@ One thing I didn't test: whether chips selected by the baseline (instead of the 
 3. Self-training is worth trying as a warm-up for chip selection, but not as a replacement for labels.
 
 **What's still broken.** The oracle ceiling at 0.349 leaves 43% of the gap unfixed. Crop, tree, and shrub are very hard to learn under the current setup. This is mostly a taxonomy and input problem:
+
 - Sahel "cropland" is bare soil most of the year — a single post-rains composite can't tell it apart from actual bare ground.
 - Shrub/grass/bare form a continuum that doesn't map to the 7-class WorldCover categories.
 
