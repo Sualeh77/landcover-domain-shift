@@ -1,15 +1,42 @@
-# Iowa → Sahel: Diagnosing and Fixing Land-Cover Segmentation Domain Shift
+# Iowa to Sahel: Land-Cover Domain Shift
 
-Interview assignment: a land-cover segmentation model scores 0.85 mIoU on temperate North America and 0.41 mIoU on semi-arid chips from a different season (same sensor). Diagnose why, and propose the intervention to bet on.
+A segmentation model trained on Iowa Sentinel-2 chips (0.56 mIoU) drops to 0.06 on Niger. I diagnose why (covariate + prior + concept shift), try a ladder of fixes, and find that labeling just 30 target chips and fine-tuning gets you most of the way there (0.32 mIoU, +26 pts).
 
-## Layout
+| Method | Source | Target |
+|--------|--------|--------|
+| Baseline | 0.561 | 0.063 |
+| + photometric aug | 0.520 | 0.129 |
+| + self-training | 0.522 | 0.192 |
+| **+ 30 active labels** | **0.515** | **0.322** |
+| Oracle (all 240 labels) | 0.522 | 0.349 |
+
+Full writeup in `report/report.md`.
+
+## Repo structure
 
 ```
-documents/   plan, notes, decision log
-notebooks/   01_data, 02_baseline, 03_diagnostics, 04_interventions
-src/         reusable code (datasets, models, augmentations, metrics)
-data/        source/ and target/ chips (git-ignored)
-report/      report.md + figures/
+notebooks/   01_data  02_baseline  03_diagnostics  04_interventions
+src/         datasets, models, training, diagnostics, interventions
+data/        sentinel-2 chips (not committed, downloaded via GEE)
+checkpoints/ model weights (not committed)
+report/      report.md + figures
+documents/   notes, plan
 ```
 
-See `documents/12_hour_plan.md` for the execution plan.
+## Setup
+
+Need Python 3.11, [uv](https://docs.astral.sh/uv/), and a GEE account.
+
+```bash
+uv sync --extra notebooks
+uv run python -m ipykernel install --user --name landcover --display-name "Python 3.11 (landcover)"
+uv run earthengine authenticate
+```
+
+Set your GEE project ID in `src/data_acquisition.py` (default is `landcover-shift`).
+
+On macOS Apple Silicon: `export PYTORCH_ENABLE_MPS_FALLBACK=1`
+
+## Running
+
+Run notebooks 01-04 in order. Notebook 01 downloads data from GEE (~5 min). Notebooks 02-04 do training (~40 min, ~15 min, ~2.5 hrs respectively on MPS). Data and checkpoints aren't in git.
