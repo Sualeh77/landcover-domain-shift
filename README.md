@@ -40,3 +40,5 @@ On macOS Apple Silicon: `export PYTORCH_ENABLE_MPS_FALLBACK=1`
 ## Running
 
 Run notebooks 01-04 in order. Notebook 01 downloads data from GEE (~5 min). Notebooks 02-04 do training (~40 min, ~15 min, ~2.5 hrs respectively on MPS). Data and checkpoints aren't in git.
+
+Notebook 04 was run in pieces during development, so its inline outputs aren't saved. The final results are in `checkpoints/intervention_results.json` and the figure is at `report/figures/04_results_ladder.png`.

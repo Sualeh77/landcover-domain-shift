@@ -14,7 +14,7 @@ Since it's the same sensor, we can rule out differences in calibration, resoluti
 
 A drop this large (50 pts) is too big to be just radiometric differences. I expected all three hypotheses to play a role.
 
-**How this relates to the assignment.** The brief describes a 0.85→0.41 drop (44 pts). My stand-in dataset shows a larger shift: 0.56→0.06 (50 pts). The Iowa model is also weaker because I'm using WorldCover labels (~75% accurate) instead of real ground truth, and only 255 training chips. The shift is more severe because Iowa and Niger are geographically farther apart than the brief implies. The diagnostic conclusions (which hypotheses dominate) should still hold at the milder shift, though the probe recoveries (like histogram matching at 8%) might be higher when the baseline is already at 0.41. Over shared classes only, the drop is 48.7 pts — shrub is absent from Iowa, so the full 7-class mIoU includes a class the model can't possibly learn.
+**How this relates to the assignment.** The brief describes a 0.85→0.41 drop (44 pts). My stand-in dataset shows a larger shift: 0.56→0.06 (50 pts). The Iowa model is probably weaker because I'm using WorldCover labels (~75% accurate) instead of real ground truth, and only 255 training chips. The diagnostic conclusions (which hypotheses dominate) should still hold at the milder shift, though the probe recoveries (like histogram matching at 8%) might be higher when the baseline is already at 0.41. Over shared classes only, the drop is 48.7 pts — shrub is absent from Iowa, so the full 7-class mIoU includes a class the model can't possibly learn.
 
 ## 2. Reproduction
 
@@ -75,19 +75,19 @@ I tried three zero-training probes to see how much of the gap each hypothesis ex
 | Baseline | 0.063 | 0.561 | — |
 | Per-chip standardization | 0.107 | 0.404 | +8.9% |
 | Histogram matching (quantile) | 0.102 | 0.561 | +7.9% |
-| Prior correction (oracle) | 0.147 | 0.512 | +16.8% |
+| Prior correction (oracle) | 0.078 | 0.561 | +3.0% |
 
 Per-chip standardization recovers 8.9% but kills source performance (0.561→0.404) — the model relies on absolute radiometric values and z-scoring breaks that. Not usable. Histogram matching gets +7.9% without hurting source, but it's still small. Simple radiometric fixes don't explain this drop. The bulk of H1 is in texture, spatial patterns, and cross-band relationships that histogram matching can't touch.
 
-Oracle prior correction (rescaling softmax by target/source class ratios, skipping classes absent from source) recovers 16.8%. It helps grass and water the most — classes where the model's features are OK but the prior is wrong. It doesn't help classes like crop or bare where the features themselves are wrong. This suggests H2 explains a real chunk of the gap, but can't be fixed in isolation.
+Oracle prior correction (rescaling softmax by target/source class ratios, skipping classes absent from source) recovers only 3.0%. It pushes grass from 0.20 to 0.45 — the model's grass features are decent, just suppressed by the Iowa prior — but tree, water, and built all collapse because the correction shifts probability mass away from them. Prior correction can't help when the features themselves are wrong, and even where features are OK, fixing one class breaks others. H2 is real (the class mix is totally different) but it can't be addressed by post-hoc reweighting alone.
 
 ### Hypothesis Weights
 
 These are rough estimates based on the probe results, not a formal decomposition:
 
-- H1 (covariate shift): ~40-50%. The inputs are very different and the encoder fully separates the domains. But simple radiometric fixes recover <10% — the real H1 problem is texture and spatial patterns, which need learned adaptation.
-- H2 (prior shift): ~20-25%. Class frequencies are inverted. Prior correction alone recovers 16.8%, and that's with broken features. With better features the prior gap would matter more.
-- H3 (concept shift): ~25-35%. Sahel cropland is bare soil most of the year, and shrub/grass/bare blur together. The confident-wrong entropy pattern is consistent with this. Only target labels can fix it.
+- H1 (covariate shift): ~50-60%. The inputs are very different and the encoder fully separates the domains. But simple radiometric fixes recover <10% — the real H1 problem is texture and spatial patterns, which need learned adaptation.
+- H2 (prior shift): ~15-20%. Class frequencies are inverted, but the prior correction probe only recovers 3%. The class mix matters, but you can't fix it without fixing the features first.
+- H3 (concept shift): ~25-30%. Sahel cropland is bare soil most of the year, and shrub/grass/bare blur together. The confident-wrong entropy pattern is consistent with this. Only target labels can fix it.
 
 Going forward: if histogram matching had recovered >50% of the gap, I'd ship normalization + augmentation and stop. At 8%, labels are clearly needed.
 
