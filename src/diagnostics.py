@@ -145,8 +145,12 @@ def evaluate_with_prior_correction(model, loader, device, src_prior, tgt_prior):
     """
     from src.training import SegmentationMetrics
 
-    # Compute correction weights
-    correction = np.array(tgt_prior) / (np.array(src_prior) + 1e-10)
+    # Compute correction weights (only for classes present in source)
+    src = np.array(src_prior, dtype=np.float64)
+    tgt = np.array(tgt_prior, dtype=np.float64)
+    correction = np.ones_like(src)
+    present = src > 1e-3  # same threshold as compute_class_weights
+    correction[present] = tgt[present] / src[present]
     correction_t = torch.tensor(correction, dtype=torch.float32, device=device)
 
     metrics = SegmentationMetrics()
